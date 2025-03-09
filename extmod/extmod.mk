@@ -2,6 +2,7 @@
 # and provides rules to build 3rd-party components for extmod modules.
 
 SRC_EXTMOD_C += \
+	extmod/graphics.c \
 	extmod/machine_adc.c \
 	extmod/machine_adc_block.c \
 	extmod/machine_bitstream.c \

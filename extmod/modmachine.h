@@ -269,4 +269,11 @@ MP_DECLARE_CONST_FUN_OBJ_2(mp_machine_spi_write_obj);
 MP_DECLARE_CONST_FUN_OBJ_3(mp_machine_spi_write_readinto_obj);
 #endif
 
+typedef struct _mp_graphics_frame_obj_t {
+    mp_obj_base_t base;
+    uint32_t width;
+    uint32_t height;
+    uint32_t stride;
+} mp_graphics_frame_obj_t;
+
 #endif // MICROPY_INCLUDED_EXTMOD_MODMACHINE_H
