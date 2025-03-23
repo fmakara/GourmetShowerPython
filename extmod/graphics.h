@@ -39,8 +39,8 @@ typedef struct _mp_graphics_typer_obj_t {
     uint16_t utf8_count; // if they are defined, they can be put/accessed on utf8_table
     graphics_typer_utf8_offset_t *utf8_table;
     mp_graphics_sprite_obj_t *target;
-    uint8_t first_width;
-    uint8_t first_height;
+    uint8_t height;
+    uint8_t stride;
 } mp_graphics_typer_obj_t;
 
 extern const mp_obj_type_t mp_graphics_typer_type;

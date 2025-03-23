@@ -13,8 +13,8 @@
 // General configs ======================================================================================
 static void mp_graphics_typer_print(const mp_print_t *print, mp_obj_t self_in, mp_print_kind_t kind) {
     mp_graphics_typer_obj_t *self = MP_OBJ_TO_PTR(self_in);
-    mp_printf(print, "Graphics.Typer(ascii=%u, utf8=%u, %ux%u)", 
-        self->ascii_count, self->utf8_count, self->first_width, self->first_height);
+    mp_printf(print, "Graphics.Typer(ascii=%u, utf8=%u, height=%u)",
+        self->ascii_count, self->utf8_count, self->height);
 }
 
 uint8_t utf8_decode(uint8_t *ptr, uint32_t *utf8){
@@ -45,7 +45,7 @@ uint8_t utf8_decode(uint8_t *ptr, uint32_t *utf8){
     return 0;
 }
 
-uint32_t mp_graphics_typer_checkbuffer_helper(mp_obj_t buffer, mp_buffer_info_t* rbi, uint32_t *utf8Cnt, char* ebuf, uint8_t ebuflen){
+uint32_t mp_graphics_typer_checkbuffer_helper(mp_obj_t buffer, mp_buffer_info_t* rbi, uint32_t *utf8Cnt, char* ebuf, uint8_t ebuflen, uint8_t stride){
     uint32_t objCnt = 0;
     mp_buffer_info_t innerRbi;
     if(rbi==NULL)rbi = &innerRbi;
@@ -63,7 +63,7 @@ uint32_t mp_graphics_typer_checkbuffer_helper(mp_obj_t buffer, mp_buffer_info_t*
     uint8_t *ptr;
     uint32_t off=0, tempLen;
     while(off<rbi->len){
-        // Format: <UTF8 char(1-4 bytes)><4bit pre, 4bit post offset><width><height><stride><data (width*stride bytes)>
+        // Format: <UTF8 char(1-4 bytes)><4bit pre, 4bit post offset><width><data (width*stride bytes)>
         tempLen = 0;
         ptr = rbi->buf + off;
         tempLen = utf8_decode(ptr, NULL);
@@ -76,13 +76,13 @@ uint32_t mp_graphics_typer_checkbuffer_helper(mp_obj_t buffer, mp_buffer_info_t*
             return 0;
         }
         uint8_t tw = ptr[tempLen+1];
-        uint8_t th = ptr[tempLen+2];
-        uint8_t ts = ptr[tempLen+3];
-        if(tw==0 || th==0 || tw>128 || th>64 || (ts<((th+7)/8))) {
+        // uint8_t th = ptr[tempLen+2];
+        // uint8_t ts = ptr[tempLen+3];
+        if(tw==0 || tw>128) {
             snprintf(ebuf, ebuflen, "invalid header at %lu", off);
             return 0;
         }
-        tempLen += ts*tw+4;
+        tempLen += stride*tw+2;
         if((off+tempLen)>rbi->len) {
             snprintf(ebuf, ebuflen, "no len for data at %lu", off);
             return 0;
@@ -97,9 +97,11 @@ uint32_t mp_graphics_typer_checkbuffer_helper(mp_obj_t buffer, mp_buffer_info_t*
 }
 
 static void mp_graphics_typer_init_helper(mp_obj_base_t* self_obj, size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
-    enum { ARG_buffer, ARG_lineHeight, ARG_target };
+    enum { ARG_buffer, ARG_height, ARG_stride, ARG_lineHeight, ARG_target };
     static const mp_arg_t allowed_args[] = {
         { MP_QSTR_buffer, MP_ARG_REQUIRED | MP_ARG_OBJ, {.u_obj = MP_OBJ_NULL} },
+        { MP_QSTR_height, MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 0} },
+        { MP_QSTR_stride, MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 0} },
         { MP_QSTR_lineHeight, MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 0} },
         { MP_QSTR_target, MP_ARG_KW_ONLY | MP_ARG_OBJ, {.u_obj = MP_OBJ_NULL} },
     };
@@ -107,7 +109,14 @@ static void mp_graphics_typer_init_helper(mp_obj_base_t* self_obj, size_t n_args
     mp_graphics_typer_obj_t *self = (mp_graphics_typer_obj_t *)self_obj;
     mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
     mp_arg_parse_all(n_args, pos_args, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
+
+    if(args[ARG_height].u_int<=0 || args[ARG_height].u_int>64) mp_raise_ValueError(MP_ERROR_TEXT("invalid height"));
+    if(args[ARG_stride].u_int<=0 || args[ARG_stride].u_int>8) mp_raise_ValueError(MP_ERROR_TEXT("invalid stride"));
+    if(args[ARG_stride].u_int < ((args[ARG_height].u_int+7)/8)) mp_raise_ValueError(MP_ERROR_TEXT("stride too small"));
     
+    self->height = args[ARG_height].u_int;
+    self->stride = args[ARG_stride].u_int;
+
     if(args[ARG_lineHeight].u_int<=0 || args[ARG_lineHeight].u_int>200) mp_raise_ValueError(MP_ERROR_TEXT("invalid line height"));
     
     if(args[ARG_target].u_obj!=MP_OBJ_NULL){
@@ -128,7 +137,7 @@ static void mp_graphics_typer_init_helper(mp_obj_base_t* self_obj, size_t n_args
     mp_buffer_info_t rbi;
     uint32_t objCount, utf8Cnt;
     char msg[50];
-    objCount = mp_graphics_typer_checkbuffer_helper(args[ARG_buffer].u_obj, &rbi, &utf8Cnt, msg, 50);
+    objCount = mp_graphics_typer_checkbuffer_helper(args[ARG_buffer].u_obj, &rbi, &utf8Cnt, msg, 50, self->stride);
     if(objCount==0) mp_raise_ValueError(msg);
     
     self->line_height = args[ARG_lineHeight].u_int;
@@ -161,13 +170,7 @@ static void mp_graphics_typer_init_helper(mp_obj_base_t* self_obj, size_t n_args
             utf8Count++;
         }
         uint8_t tw = ptr[tempLen+1];
-        uint8_t th = ptr[tempLen+2];
-        uint8_t ts = ptr[tempLen+3];
-        if(off==0){
-            self->first_width = tw;
-            self->first_height = th;
-        }
-        tempLen += ts*tw+4;
+        tempLen += self->stride*tw+2;
         off += tempLen;
     }
 }
@@ -199,26 +202,28 @@ static mp_obj_t mp_graphics_typer_make_new(const mp_obj_type_t *type, size_t n_a
 }
 
 // Globals ===================================================================================
-static mp_obj_t graphics_typer_check_buffer(mp_obj_t buffer_obj) {
+static mp_obj_t graphics_typer_check_buffer(mp_obj_t buffer_obj, mp_obj_t stride_obj) {
     char msg[50];
-    uint32_t objCount = mp_graphics_typer_checkbuffer_helper(buffer_obj, NULL, NULL, msg, 50);
+    int stride = mp_obj_get_int(stride_obj);
+    if(stride<1 || stride>8) mp_raise_ValueError(MP_ERROR_TEXT("invalid stride"));
+    uint32_t objCount = mp_graphics_typer_checkbuffer_helper(buffer_obj, NULL, NULL, msg, 50, stride);
     if(objCount==0) return mp_obj_new_str_from_cstr(msg);
     return MP_OBJ_NEW_SMALL_INT(objCount);
 }
-static MP_DEFINE_CONST_FUN_OBJ_1(graphics_typer_check_buffer_obj, graphics_typer_check_buffer);
+static MP_DEFINE_CONST_FUN_OBJ_2(graphics_typer_check_buffer_obj, graphics_typer_check_buffer);
 
 // Getters ===================================================================================
-static mp_obj_t graphics_typer_get_width(mp_obj_t self_obj) {
-    mp_graphics_typer_obj_t *self = (mp_graphics_typer_obj_t*) MP_OBJ_TO_PTR(self_obj);
-    return MP_OBJ_NEW_SMALL_INT(self->target->width);
-}
-static MP_DEFINE_CONST_FUN_OBJ_1(graphics_typer_get_width_obj, graphics_typer_get_width);
+//static mp_obj_t graphics_typer_get_width(mp_obj_t self_obj) {
+//    mp_graphics_typer_obj_t *self = (mp_graphics_typer_obj_t*) MP_OBJ_TO_PTR(self_obj);
+//    return MP_OBJ_NEW_SMALL_INT(self->target->width);
+//}
+//static MP_DEFINE_CONST_FUN_OBJ_1(graphics_typer_get_width_obj, graphics_typer_get_width);
 
-static mp_obj_t graphics_typer_get_height(mp_obj_t self_obj) {
-    mp_graphics_typer_obj_t *self = (mp_graphics_typer_obj_t*) MP_OBJ_TO_PTR(self_obj);
-    return MP_OBJ_NEW_SMALL_INT(self->target->height);
-}
-static MP_DEFINE_CONST_FUN_OBJ_1(graphics_typer_get_height_obj, graphics_typer_get_height);
+//static mp_obj_t graphics_typer_get_height(mp_obj_t self_obj) {
+//    mp_graphics_typer_obj_t *self = (mp_graphics_typer_obj_t*) MP_OBJ_TO_PTR(self_obj);
+//    return MP_OBJ_NEW_SMALL_INT(self->target->height);
+//}
+//static MP_DEFINE_CONST_FUN_OBJ_1(graphics_typer_get_height_obj, graphics_typer_get_height);
 
 // static mp_obj_t graphics_typer_get_stride(mp_obj_t self_obj) {
 //     mp_graphics_typer_obj_t *self = (mp_graphics_typer_obj_t*) MP_OBJ_TO_PTR(self_obj);
@@ -276,7 +281,7 @@ static mp_obj_t graphics_typer_print(size_t n_args, const mp_obj_t *args) {
                     self->target->width, self->target->height,
                     self->target->offsetX, self->target->offsetY, 
                     self->target->stride, self->target->buffer,
-                    ptr[0], ptr[1], 0, 0, ptr[2], ptr+3
+                    ptr[0], self->height, 0, 0, self->stride, ptr+1
                 );
                 x += ptr[0]+post;
             }
@@ -345,8 +350,8 @@ static const mp_rom_map_elem_t graphics_typer_locals_dict_table[] = {
     // Globals
     { MP_ROM_QSTR(MP_QSTR_checkBuffer), MP_ROM_PTR(&graphics_typer_check_buffer_obj) },
     // Getters
-    { MP_ROM_QSTR(MP_QSTR_width), MP_ROM_PTR(&graphics_typer_get_width_obj) },
-    { MP_ROM_QSTR(MP_QSTR_height), MP_ROM_PTR(&graphics_typer_get_height_obj) },
+    // { MP_ROM_QSTR(MP_QSTR_width), MP_ROM_PTR(&graphics_typer_get_width_obj) },
+    // { MP_ROM_QSTR(MP_QSTR_height), MP_ROM_PTR(&graphics_typer_get_height_obj) },
     // { MP_ROM_QSTR(MP_QSTR_stride), MP_ROM_PTR(&graphics_typer_get_stride_obj) },
     // { MP_ROM_QSTR(MP_QSTR_buffer), MP_ROM_PTR(&graphics_typer_get_buffer_obj) },
     // Main methods
