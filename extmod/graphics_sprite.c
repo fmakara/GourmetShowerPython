@@ -2,10 +2,13 @@
 
 // #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "py/mperrno.h"
 #include "py/mphal.h"
 #include "py/runtime.h"
 #include "graphics.h"
+#include "py/obj.h"
+#include "py/objstr.h"
 
 // General configs ======================================================================================
 static void mp_graphics_sprite_print(const mp_print_t *print, mp_obj_t self_in, mp_print_kind_t kind) {
@@ -35,17 +38,18 @@ static void mp_graphics_sprite_init_helper(mp_obj_base_t* self_obj, size_t n_arg
     self->offsetY = 0;
     self->raw = NULL;
     self->buffer = NULL;
+    self->buffer_is_internal = 0;
     
     if(args[ARG_raw].u_obj != MP_OBJ_NULL){
         mp_buffer_info_t raw_buffer_info;
         mp_get_buffer_raise(args[ARG_raw].u_obj, &raw_buffer_info, MP_BUFFER_READ);
-        if(raw_buffer_info.len<4) mp_raise_TypeError(MP_ERROR_TEXT("raw buffer too small"));
+        if(raw_buffer_info.len<4) mp_raise_ValueError(MP_ERROR_TEXT("raw buffer too small"));
         uint8_t *tb = (uint8_t*)raw_buffer_info.buf;
         uint8_t tw = tb[0];
         uint8_t th = tb[1];
         uint8_t ts = tb[2];
         if(tw==0 || th==0 || tw>200 || th>200 || ts<(th/8) || (ts*(tw-1)+(th+7)/8)>raw_buffer_info.len){
-            mp_raise_TypeError(MP_ERROR_TEXT("Invalid object metadata"));
+            mp_raise_ValueError(MP_ERROR_TEXT("Invalid object metadata"));
         }
         self->raw = tb;
         self->buffer = self->raw+3;
@@ -58,13 +62,18 @@ static void mp_graphics_sprite_init_helper(mp_obj_base_t* self_obj, size_t n_arg
         mp_buffer_info_t raw_buffer_info;
         mp_get_buffer_raise(args[ARG_buffer].u_obj, &raw_buffer_info, MP_BUFFER_READ);
         if((self->stride*(self->width-1)+(self->height+7)/8)>raw_buffer_info.len){
-            mp_raise_TypeError(MP_ERROR_TEXT("Invalid Buffer size"));
+            mp_raise_ValueError(MP_ERROR_TEXT("Invalid Buffer size"));
         }
         self->buffer = raw_buffer_info.buf;
     }
 
     if(self->width<0 || self->width>200 || self->height<0 || self->height>200 || self->stride<(self->height/8)){
-        mp_raise_TypeError(MP_ERROR_TEXT("Invalid sprite size"));
+        mp_raise_ValueError(MP_ERROR_TEXT("Invalid sprite size"));
+    }
+    if(self->width>0 && self->buffer==NULL){
+        // allocating internally
+        self->buffer = malloc(self->width&self->stride);
+        self->buffer_is_internal = 1;
     }
 }
 
@@ -74,6 +83,22 @@ static mp_obj_t mp_graphics_sprite_init(size_t n_args, const mp_obj_t *args, mp_
     return mp_const_none;
 }
 MP_DEFINE_CONST_FUN_OBJ_KW(graphics_sprite_init_obj, 1, mp_graphics_sprite_init);
+
+static mp_obj_t mp_graphics_sprite_deinit(mp_obj_t self_obj) {
+    mp_graphics_sprite_obj_t *self = (mp_graphics_sprite_obj_t *)MP_OBJ_TO_PTR(self_obj);
+    if(self->buffer_is_internal && self->buffer!=NULL){
+        free(self->buffer);
+        self->buffer = NULL;
+        self->buffer_is_internal = 0;
+    }
+    self->raw = NULL;
+    self->buffer = NULL;
+    self->width = 0;
+    self->height = 0;
+    self->stride = 0;
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_1(graphics_sprite_deinit_obj, mp_graphics_sprite_deinit);
 
 static mp_obj_t mp_graphics_sprite_make_new(const mp_obj_type_t *type, size_t n_args, size_t n_kw, const mp_obj_t *args) {
     // create new Graphicssprite object
@@ -262,7 +287,7 @@ static mp_obj_t graphics_sprite_rect(size_t n_args, const mp_obj_t *args) {
 MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(graphics_sprite_rect_obj, 6, 6, graphics_sprite_rect);
 
 // https://en.wikipedia.org/wiki/Bresenham%27s_line_algorithm#:~:text=All%20cases
-static inline int abs(int a){ return a>0?a:-a; }
+// static inline int abs(int a){ return a>0?a:-a; }
 static void plotLineLow(mp_graphics_sprite_obj_t* self, int x0, int y0, int x1, int y1, mp_obj_t* color){
     int dx = x1 - x0;
     int dy = y1 - y0;
@@ -331,6 +356,36 @@ static mp_obj_t graphics_sprite_line(size_t n_args, const mp_obj_t *args) {
 }
 MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(graphics_sprite_line_obj, 6, 6, graphics_sprite_line);
 
+void graphics_sprite_copy_from_helper(
+    uint8_t x, uint8_t y,
+    uint8_t destWidth, uint8_t destHeight, uint8_t destOffX, uint8_t destOffY, uint8_t destStride, uint8_t* destBuffer,
+    uint8_t srcWidth, uint8_t srcHeight, uint8_t srcOffX, uint8_t srcOffY, uint8_t srcStride, uint8_t* srcBuffer
+){
+    if(x>destWidth || y>destHeight || (-x)>srcWidth || (-y)>srcHeight) return;
+
+    int dy0 = (y+destOffY+srcHeight);
+    int dy1 = (y+destOffY);
+    if(dy0<0) dy0 = 0;
+    if(dy0>=64) dy0 = 63;
+    if(dy1<0) dy1 = 0;
+    if(dy1>=64) dy1 = 63;
+    uint64_t destMask = ~(((1ULL<<dy0)-1) & ~((1ULL<<dy1)-1));
+    uint64_t srcMask = ((1ULL<<(srcHeight))-1);
+    for(int i=0; i<srcWidth; i++){
+        int dx = i + destOffX + x;
+        if(dx>=0 && dx<destWidth){
+            uint64_t colSrc, colDest;
+            uint8_t *ptrDest = destBuffer + destStride*dx;
+            memcpy(&colSrc, srcBuffer + srcStride*(i+srcOffX), srcStride>8?8:srcStride);
+            memcpy(&colDest, ptrDest, destStride>8?8:destStride);
+            int shifty = y+destOffY;
+            if(shifty>0) colSrc = ((colSrc>>srcOffY)&srcMask)<<shifty;
+            else colSrc = ((colSrc>>srcOffY)&srcMask)>>(-shifty);
+            colDest = (colDest&destMask) | colSrc;
+            memcpy(ptrDest, &colDest, destStride>8?8:destStride);
+        }
+    }
+}
 
 static mp_obj_t graphics_sprite_copy_from(size_t n_args, const mp_obj_t *args) {
     mp_graphics_sprite_obj_t *self = (mp_graphics_sprite_obj_t*) MP_OBJ_TO_PTR(args[0]);
@@ -338,43 +393,52 @@ static mp_obj_t graphics_sprite_copy_from(size_t n_args, const mp_obj_t *args) {
     mp_obj_t *src_obj = args[1];
     int x = mp_obj_get_int(args[2]);
     int y = mp_obj_get_int(args[3]);
+
+    if(x>self->width || y>self->height) return mp_const_none;
+
+    uint8_t tw = 0, th, tx, ty, ts, *tbuf; // width, height, offsetx, offsety, stride and buffer
     if(mp_obj_is_type(src_obj, &mp_graphics_sprite_type)){
         mp_graphics_sprite_obj_t *src = (mp_graphics_sprite_obj_t*) MP_OBJ_TO_PTR(src_obj);
-        if(x>self->width || y>self->height || (-x)>src->width || (-y)>src->height) return mp_const_none;
-        int dy0 = (y+self->offsetY+src->height);
-        int dy1 = (y+self->offsetY);
-        if(dy0<0) dy0 = 0;
-        if(dy0>=64) dy0 = 63;
-        if(dy1<0) dy1 = 0;
-        if(dy1>=64) dy1 = 63;
-        uint64_t destMask = ~(((1ULL<<dy0)-1) & ~((1ULL<<dy1)-1));
-        uint64_t srcMask = ((1ULL<<(src->height))-1);
-        for(int i=0; i<src->width; i++){
-            int dx = i + self->offsetX + x;
-            if(dx>=0 && dx<self->width){
-                uint64_t colSrc, colDest;
-                uint8_t *ptrDest = self->buffer + self->stride*dx;
-                memcpy(&colSrc, src->buffer + src->stride*(i+src->offsetX), src->stride>8?8:src->stride);
-                memcpy(&colDest, ptrDest, self->stride>8?8:self->stride);
-                int shifty = y+self->offsetY;
-                if(shifty>0) colSrc = ((colSrc>>src->offsetY)&srcMask)<<shifty;
-                else colSrc = ((colSrc>>src->offsetY)&srcMask)>>(-shifty);
-                colDest = (colDest&destMask) | colSrc;
-                memcpy(ptrDest, &colDest, self->stride>8?8:self->stride);
-            }
+        if(src->width==0 || x>self->width || y>self->height || (-x)>src->width || (-y)>src->height) return mp_const_none;
+        tw = src->width;
+        th = src->height;
+        tx = src->offsetX;
+        ty = src->offsetY;
+        ts = src->stride;
+        tbuf = src->buffer;
+        if(tw==0) return mp_const_none;
+    } else if(mp_obj_is_str_or_bytes(src_obj)){
+        mp_buffer_info_t raw_buffer_info;
+        mp_get_buffer_raise(src_obj, &raw_buffer_info, MP_BUFFER_READ);
+        if(raw_buffer_info.len<4) mp_raise_ValueError(MP_ERROR_TEXT("raw buffer too small"));
+        uint8_t *tb = (uint8_t*)raw_buffer_info.buf;
+        tw = tb[0]; // width
+        th = tb[1]; // height
+        ts = tb[2]; // stride
+        tbuf = tb+3; // buffer
+        tx = 0;
+        ty = 0;
+        if(tw==0 || th==0 || tw>200 || th>200 || ts<(th/8) || ts>127 || (ts*(tw-1)+(th+7)/8)>raw_buffer_info.len){
+            mp_raise_ValueError(MP_ERROR_TEXT("Invalid object metadata"));
         }
     } else {
-        mp_raise_TypeError(MP_ERROR_TEXT("Invalid source object"));
+        mp_raise_ValueError(MP_ERROR_TEXT("Invalid source object"));
     }
+
+    if(tw==0 || (-x)>tw || (-y)>th) return mp_const_none;
+    graphics_sprite_copy_from_helper(x, y,
+        self->width, self->height, self->offsetX, self->offsetY, self->stride, self->buffer,
+        tw, th, tx, ty, ts, tbuf);
     return mp_const_none;
 }
 MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(graphics_sprite_copy_from_obj, 4, 4, graphics_sprite_copy_from);
 
-/// mp_obj_is_type
 
 
 static const mp_rom_map_elem_t graphics_sprite_locals_dict_table[] = {
     { MP_ROM_QSTR(MP_QSTR_init), MP_ROM_PTR(&graphics_sprite_init_obj) },
+    { MP_ROM_QSTR(MP_QSTR_deinit), MP_ROM_PTR(&graphics_sprite_deinit_obj) },
+    { MP_ROM_QSTR(MP_QSTR___del__), MP_ROM_PTR(&graphics_sprite_deinit_obj) },
     // Getters
     { MP_ROM_QSTR(MP_QSTR_width), MP_ROM_PTR(&graphics_sprite_get_width_obj) },
     { MP_ROM_QSTR(MP_QSTR_height), MP_ROM_PTR(&graphics_sprite_get_height_obj) },

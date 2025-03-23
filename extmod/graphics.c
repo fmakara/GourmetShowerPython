@@ -7,6 +7,7 @@ static const mp_rom_map_elem_t graphics_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_Graphics) },
 
     { MP_ROM_QSTR(MP_QSTR_Sprite), MP_ROM_PTR(&mp_graphics_sprite_type) },
+    { MP_ROM_QSTR(MP_QSTR_Typer), MP_ROM_PTR(&mp_graphics_typer_type) },
 };
 static MP_DEFINE_CONST_DICT(graphics_module_globals, graphics_module_globals_table);
 
