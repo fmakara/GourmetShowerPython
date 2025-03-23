@@ -9,6 +9,7 @@ set(MICROPY_SOURCE_EXTMOD
     ${MICROPY_EXTMOD_DIR}/btstack/modbluetooth_btstack.c
     ${MICROPY_EXTMOD_DIR}/graphics.c
     ${MICROPY_EXTMOD_DIR}/graphics_sprite.c
+    ${MICROPY_EXTMOD_DIR}/graphics_typer.c
     ${MICROPY_EXTMOD_DIR}/machine_adc.c
     ${MICROPY_EXTMOD_DIR}/machine_adc_block.c
     ${MICROPY_EXTMOD_DIR}/machine_bitstream.c

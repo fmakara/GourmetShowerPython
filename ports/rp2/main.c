@@ -46,6 +46,7 @@
 #include "mpnetworkport.h"
 #include "genhdr/mpversion.h"
 #include "mp_usbd.h"
+#include "triac.h"
 
 #include "pico/stdlib.h"
 #include "pico/binary_info.h"
@@ -165,6 +166,7 @@ int main(int argc, char **argv) {
 
         // Initialise sub-systems.
         readline_init0();
+        triac_global_init();
         machine_pin_init();
         rp2_pio_init();
         rp2_dma_init();
