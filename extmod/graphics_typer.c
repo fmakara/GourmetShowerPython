@@ -243,12 +243,35 @@ static MP_DEFINE_CONST_FUN_OBJ_2(graphics_typer_check_buffer_obj, graphics_typer
 
 // Main methods =====================================================================
 
+static mp_obj_t graphics_typer_set_target(mp_obj_t self_obj, mp_obj_t target_obj) {
+    mp_graphics_typer_obj_t *self = (mp_graphics_typer_obj_t*) MP_OBJ_TO_PTR(self_obj);
+
+    if(target_obj!=MP_OBJ_NULL && target_obj!=mp_const_none){
+        if(!mp_obj_is_type(target_obj, &mp_graphics_sprite_type)){
+            mp_obj_t obj = mp_obj_cast_to_native_base(target_obj, &mp_graphics_sprite_type);
+            if(obj!=MP_OBJ_NULL){
+                self->target = (mp_graphics_sprite_obj_t*) MP_OBJ_TO_PTR(obj);
+            } else {
+                mp_raise_TypeError(MP_ERROR_TEXT("target must be a sprite"));
+            }
+        } else {
+            self->target = (mp_graphics_sprite_obj_t*) MP_OBJ_TO_PTR(target_obj);
+        }
+    } else {
+        self->target = NULL;
+    }
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_2(graphics_typer_set_target_obj, graphics_typer_set_target);
+
+
 static mp_obj_t graphics_typer_print(size_t n_args, const mp_obj_t *args) {
     mp_graphics_typer_obj_t *self = (mp_graphics_typer_obj_t*) MP_OBJ_TO_PTR(args[0]);
     if(self->target==NULL) mp_raise_TypeError(MP_ERROR_TEXT("typer has no target, use printInto"));
     mp_buffer_info_t rbi;
     mp_get_buffer_raise(args[1], &rbi, MP_BUFFER_READ);
     int x = mp_obj_get_int(args[2]);
+
     int y = mp_obj_get_int(args[3]);
     int starting_x = x;
     uint32_t off = 0, utf8;
@@ -355,6 +378,7 @@ static const mp_rom_map_elem_t graphics_typer_locals_dict_table[] = {
     // { MP_ROM_QSTR(MP_QSTR_stride), MP_ROM_PTR(&graphics_typer_get_stride_obj) },
     // { MP_ROM_QSTR(MP_QSTR_buffer), MP_ROM_PTR(&graphics_typer_get_buffer_obj) },
     // Main methods
+    { MP_ROM_QSTR(MP_QSTR_setTarget), MP_ROM_PTR(&graphics_typer_set_target_obj) },
     { MP_ROM_QSTR(MP_QSTR_print), MP_ROM_PTR(&graphics_typer_print_obj) },
     { MP_ROM_QSTR(MP_QSTR_calculateSize), MP_ROM_PTR(&graphics_typer_calculate_size_obj) },
 };

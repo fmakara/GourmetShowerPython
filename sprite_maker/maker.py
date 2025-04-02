@@ -10,8 +10,7 @@ parser.add_argument('img', nargs='?', type=argparse.FileType('rb'))
 parser.add_argument('-t', '--threshold', type=int, default=128)
 parser.add_argument('-i', '--invert', action='store_const', default=False, const=True)
 
-inputs = parser.parse_args(['/mnt/c/Users/Makara/Downloads/a.png','-i'])
-
+inputs = parser.parse_args()
 
 img = Image.open(inputs.img).convert('L')
 ary = np.transpose(np.array(img))
