@@ -99,8 +99,14 @@ static mp_obj_t machine_rtc_datetime(mp_uint_t n_args, const mp_obj_t *args) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(machine_rtc_datetime_obj, 1, 2, machine_rtc_datetime);
 
+static mp_obj_t machine_rtc_weekday(mp_uint_t n_args, const mp_obj_t *args) {
+    return MP_OBJ_NEW_SMALL_INT(timeutils_calc_weekday(mp_obj_get_int(args[1]), mp_obj_get_int(args[2]), mp_obj_get_int(args[3])));
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(machine_rtc_weekday_obj, 4, 4, machine_rtc_weekday);
+
 static const mp_rom_map_elem_t machine_rtc_locals_dict_table[] = {
     { MP_ROM_QSTR(MP_QSTR_datetime), MP_ROM_PTR(&machine_rtc_datetime_obj) },
+    { MP_ROM_QSTR(MP_QSTR_weekday), MP_ROM_PTR(&machine_rtc_weekday_obj) },
 };
 static MP_DEFINE_CONST_DICT(machine_rtc_locals_dict, machine_rtc_locals_dict_table);
 

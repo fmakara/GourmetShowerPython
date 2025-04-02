@@ -16,8 +16,9 @@
 #define INVALIDPIN 255
 #define ALARM_ID_INVALID (-1)
 
-#define TRIAC_TIMING_SIZE (8)
+#define TRIAC_TIMING_SIZE (32)
 #define TRIAC_MAX_PINS (32)
+#define TRIAC_MAX_DELTA (0x0FFFFFFFULL)
 
 typedef struct {
     uint8_t active;
@@ -35,6 +36,7 @@ typedef struct {
     uint8_t timing_index;
     uint64_t last_crosses[2];
     uint32_t last_timings[TRIAC_TIMING_SIZE];
+    uint32_t max_dt;
 } TriacData;
 static volatile TriacData triac_data[TRIAC_MAX_PINS];
 static alarm_pool_t *triac_alarm_pool; 
@@ -59,7 +61,7 @@ inline static void triac_gpio_irq_handler(uint8_t gpio, uint8_t events){
     volatile TriacData *data = &triac_data[gpio];
     uint64_t delta = now - data->last_crosses[data->timing_index&1];
     if(delta<data->ignore_timing) return; // too soon, probably another zero cross
-    if(delta>0x0FFFFFFFULL) delta = 0x0FFFFFFFULL;
+    if(delta>data->max_dt) delta = data->max_dt;
     data->timing_index = (data->timing_index+1)%TRIAC_TIMING_SIZE;
     data->last_crosses[data->timing_index&1] = now;
     data->last_timings[data->timing_index] = delta;
@@ -116,6 +118,7 @@ static inline void reset_triac_data(uint8_t pin){
     triac_data[pin].timing_index = 0;
     triac_data[pin].last_crosses[0] = 0;
     triac_data[pin].last_crosses[1] = 0;
+    triac_data[pin].max_dt = 100*1000;
     triac_data[pin].alarm_activate = ALARM_ID_INVALID;
     triac_data[pin].alarm_deactivate = ALARM_ID_INVALID;
     for(uint8_t i=0; i<TRIAC_TIMING_SIZE; i++){
@@ -134,6 +137,29 @@ void triac_global_init(void) {
     machine_pin_ext_init();
     #endif
 }
+
+static int triac_controller_read_average_timings(uint8_t trigger){
+    if(!triac_data[trigger].active) return 0;
+    uint8_t initial_timing_index, final_timing_index;
+    uint64_t last_crosses[2];
+    uint32_t last_timings[TRIAC_TIMING_SIZE];
+    do{
+        initial_timing_index = triac_data[trigger].timing_index;
+        last_crosses[0] = triac_data[trigger].last_crosses[0];
+        last_crosses[1] = triac_data[trigger].last_crosses[1];
+        for(uint i=0; i<TRIAC_TIMING_SIZE; i++) last_timings[i] = triac_data[trigger].last_timings[1];
+        final_timing_index = triac_data[trigger].timing_index;
+    }while(initial_timing_index!=final_timing_index);
+    uint64_t now = time_us_64();
+    if(last_crosses[0]+triac_data[trigger].max_dt<now || last_crosses[1]+triac_data[trigger].max_dt<now) return 0;
+    uint64_t sum = 0;
+    for(uint i=0; i<TRIAC_TIMING_SIZE; i++){
+        if(last_timings[i]==0 || last_timings[i]>=triac_data[trigger].max_dt) return 0;
+        sum += last_timings[i];
+    }
+    return sum/TRIAC_TIMING_SIZE;
+}
+
 
 // General configs ======================================================================================
 
@@ -249,6 +275,13 @@ static mp_obj_t triac_controller_percent(size_t n_args, const mp_obj_t *args) {
 }
 MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(triac_controller_percent_obj, 1, 2, triac_controller_percent);
 
+
+static mp_obj_t triac_controller_half_period(mp_obj_t self_obj) {
+    mp_triac_controller_obj_t *self = (mp_triac_controller_obj_t*) MP_OBJ_TO_PTR(self_obj);
+    return mp_obj_new_int(triac_controller_read_average_timings(self->sense_pin));
+}
+MP_DEFINE_CONST_FUN_OBJ_1(triac_controller_half_period_obj,  triac_controller_half_period);
+
 // static mp_obj_t triac_controller_get_height(mp_obj_t self_obj) {
 //     mp_triac_controller_obj_t *self = (mp_triac_controller_obj_t*) MP_OBJ_TO_PTR(self_obj);
 //     return MP_OBJ_NEW_SMALL_INT(self->height);
@@ -265,6 +298,8 @@ static const mp_rom_map_elem_t triac_controller_locals_dict_table[] = {
     { MP_ROM_QSTR(MP_QSTR_close), MP_ROM_PTR(&triac_controller_close_obj) },
     // Getters / Setters
     { MP_ROM_QSTR(MP_QSTR_percent), MP_ROM_PTR(&triac_controller_percent_obj) },
+    { MP_ROM_QSTR(MP_QSTR_halfPeriod), MP_ROM_PTR(&triac_controller_half_period_obj) },
+    
     // Main methods
     
 };
