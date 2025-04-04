@@ -7,6 +7,7 @@ static const mp_rom_map_elem_t triac_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_Triac) },
 
     { MP_ROM_QSTR(MP_QSTR_Controller), MP_ROM_PTR(&mp_triac_controller_type) },
+    { MP_ROM_QSTR(MP_QSTR_PowerAnalyzer), MP_ROM_PTR(&mp_triac_power_analyzer_type) },
 };
 static MP_DEFINE_CONST_DICT(triac_module_globals, triac_module_globals_table);
 
