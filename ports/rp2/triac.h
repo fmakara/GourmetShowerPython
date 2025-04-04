@@ -9,8 +9,8 @@
 typedef struct _mp_triac_controller_obj_t {
     mp_obj_base_t base;
     uint8_t sense_pin;
-    uint8_t trigger_pin;
     uint8_t percent;
+    uint32_t watchdog;
 } mp_triac_controller_obj_t;
 
 extern const mp_obj_type_t mp_triac_controller_type;
