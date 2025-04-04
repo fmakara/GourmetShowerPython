@@ -25,6 +25,7 @@
         "cstdlib": "c",
         "memory": "c",
         "string": "c",
-        "string_view": "c"
+        "string_view": "c",
+        "mphalport.h": "c"
     }
 }
