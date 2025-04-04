@@ -13,7 +13,16 @@ typedef struct _mp_triac_controller_obj_t {
     uint32_t watchdog;
 } mp_triac_controller_obj_t;
 
+typedef struct _mp_triac_power_analyzer_obj_t {
+    mp_obj_base_t base;
+    uint8_t voltage_pin;
+    uint8_t current_pin;
+    uint32_t percent;
+    uint32_t watchdog;
+} mp_triac_power_analyzer_obj_t;
+
 extern const mp_obj_type_t mp_triac_controller_type;
+extern const mp_obj_type_t mp_triac_power_analyzer_type;
 
 void triac_global_init(void);
 

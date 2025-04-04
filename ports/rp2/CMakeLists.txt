@@ -157,6 +157,7 @@ set(MICROPY_SOURCE_PORT
     machine_spi.c
     machine_timer.c
     triac.c
+    triac_power_analyzer.c
     triac_controller.c
     main.c
     modrp2.c
@@ -195,6 +196,7 @@ set(MICROPY_SOURCE_QSTR
     ${MICROPY_PORT_DIR}/rp2_pio.c
     ${MICROPY_PORT_DIR}/rp2_dma.c
     ${MICROPY_PORT_DIR}/triac.c
+    ${MICROPY_PORT_DIR}/triac_power_analyzer.c
     ${MICROPY_PORT_DIR}/triac_controller.c
     ${CMAKE_BINARY_DIR}/pins_${MICROPY_BOARD}.c
 )
