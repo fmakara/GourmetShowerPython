@@ -1,0 +1,13 @@
+{
+    "cmake.sourceDirectory": "/root/pico/GourmetShowerPython/ports/rp2",
+    "files.associations": {
+        "modmachine.h": "c",
+        "ranges": "c",
+        "graphics.h": "c",
+        "binary.h": "c",
+        "stdint.h": "c",
+        "any": "c",
+        "*.tcc": "c",
+        "fstream": "c"
+    }
+}

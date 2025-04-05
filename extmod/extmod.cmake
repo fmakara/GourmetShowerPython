@@ -7,6 +7,8 @@ set(MICROPY_SOURCE_EXTMOD
     ${MICROPY_DIR}/shared/libc/abort_.c
     ${MICROPY_DIR}/shared/libc/printf.c
     ${MICROPY_EXTMOD_DIR}/btstack/modbluetooth_btstack.c
+    ${MICROPY_EXTMOD_DIR}/graphics.c
+    ${MICROPY_EXTMOD_DIR}/graphics_sprite.c
     ${MICROPY_EXTMOD_DIR}/machine_adc.c
     ${MICROPY_EXTMOD_DIR}/machine_adc_block.c
     ${MICROPY_EXTMOD_DIR}/machine_bitstream.c
