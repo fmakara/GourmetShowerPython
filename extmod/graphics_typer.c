@@ -213,17 +213,24 @@ static mp_obj_t graphics_typer_check_buffer(mp_obj_t buffer_obj, mp_obj_t stride
 static MP_DEFINE_CONST_FUN_OBJ_2(graphics_typer_check_buffer_obj, graphics_typer_check_buffer);
 
 // Getters ===================================================================================
+
+static mp_obj_t graphics_typer_get_height(mp_obj_t self_obj) {
+    mp_graphics_typer_obj_t *self = (mp_graphics_typer_obj_t*) MP_OBJ_TO_PTR(self_obj);
+    return MP_OBJ_NEW_SMALL_INT(self->height);
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(graphics_typer_get_height_obj, graphics_typer_get_height);
+
+static mp_obj_t graphics_typer_get_line_height(mp_obj_t self_obj) {
+    mp_graphics_typer_obj_t *self = (mp_graphics_typer_obj_t*) MP_OBJ_TO_PTR(self_obj);
+    return MP_OBJ_NEW_SMALL_INT(self->line_height);
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(graphics_typer_get_line_height_obj, graphics_typer_get_line_height);
+
 //static mp_obj_t graphics_typer_get_width(mp_obj_t self_obj) {
 //    mp_graphics_typer_obj_t *self = (mp_graphics_typer_obj_t*) MP_OBJ_TO_PTR(self_obj);
 //    return MP_OBJ_NEW_SMALL_INT(self->target->width);
 //}
 //static MP_DEFINE_CONST_FUN_OBJ_1(graphics_typer_get_width_obj, graphics_typer_get_width);
-
-//static mp_obj_t graphics_typer_get_height(mp_obj_t self_obj) {
-//    mp_graphics_typer_obj_t *self = (mp_graphics_typer_obj_t*) MP_OBJ_TO_PTR(self_obj);
-//    return MP_OBJ_NEW_SMALL_INT(self->target->height);
-//}
-//static MP_DEFINE_CONST_FUN_OBJ_1(graphics_typer_get_height_obj, graphics_typer_get_height);
 
 // static mp_obj_t graphics_typer_get_stride(mp_obj_t self_obj) {
 //     mp_graphics_typer_obj_t *self = (mp_graphics_typer_obj_t*) MP_OBJ_TO_PTR(self_obj);
@@ -352,9 +359,9 @@ static mp_obj_t graphics_typer_calculate_size(mp_obj_t self_obj, mp_obj_t str_ob
             if(ptr!=NULL){
                 x += pre+ptr[0]+post;
             }
+            if(x>maxx) maxx = x;
             if(utf8=='\n'){
                 y+=self->line_height;
-                if(x>maxx) maxx = x;
                 x = 0;
             }
             off += tempOff;
@@ -373,8 +380,8 @@ static const mp_rom_map_elem_t graphics_typer_locals_dict_table[] = {
     // Globals
     { MP_ROM_QSTR(MP_QSTR_checkBuffer), MP_ROM_PTR(&graphics_typer_check_buffer_obj) },
     // Getters
-    // { MP_ROM_QSTR(MP_QSTR_width), MP_ROM_PTR(&graphics_typer_get_width_obj) },
-    // { MP_ROM_QSTR(MP_QSTR_height), MP_ROM_PTR(&graphics_typer_get_height_obj) },
+    { MP_ROM_QSTR(MP_QSTR_height), MP_ROM_PTR(&graphics_typer_get_height_obj) },
+    { MP_ROM_QSTR(MP_QSTR_lineHeight), MP_ROM_PTR(&graphics_typer_get_line_height_obj) },
     // { MP_ROM_QSTR(MP_QSTR_stride), MP_ROM_PTR(&graphics_typer_get_stride_obj) },
     // { MP_ROM_QSTR(MP_QSTR_buffer), MP_ROM_PTR(&graphics_typer_get_buffer_obj) },
     // Main methods
