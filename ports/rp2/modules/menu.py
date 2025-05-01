@@ -1,4 +1,5 @@
 import time
+from Graphics import Sprite
 
 def days_in_month(year, month):
     dim = [31, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]

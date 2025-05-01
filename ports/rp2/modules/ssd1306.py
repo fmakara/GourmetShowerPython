@@ -85,7 +85,7 @@ SSD1306_dlist1 = bytes([
 
 class SSD1306(Sprite):
     def __init__(self, scl=Pin(27), sda=Pin(26), i2cmod=1, address=60, startup=True, rotation=False):
-        super().__init__(width=128, height=64, stride=8, buffer=bytes(8*128))
+        super().__init__(width=128, height=64, stride=8)
         self.i2c = I2C(i2cmod, sda=sda, scl=scl, freq=400_000)
         self.addr = address
         self._rotation = rotation

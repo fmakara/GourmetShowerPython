@@ -23,148 +23,166 @@
 #define MAX_NUM_CHANNELS (4)
 #define INVALID_DMA_CHANNEL (-1)
 static mp_triac_power_analyzer_obj_t tpa_singleton = {
-    {&mp_triac_power_analyzer_type}, INVALIDPIN, INVALIDPIN, 0, 0, 0, 1.0f, 1.0f, 1.0f,
-    0,   NULL, NULL, 0,    0, 0,    0, 0, 0,    0, 0, 0,    0, 0, 0,    0, INVALID_DMA_CHANNEL
+    {&mp_triac_power_analyzer_type}, INVALIDPIN, INVALIDPIN, 0, /*0, 0,*/ 1.0f, 1.0f, 1.0f,
+    0, 0, 1, 0,
+    {{{0}, {0},   {0}, {0}, 0,   0, 0, 0,  0, 0, 0,  0, 0, 0,  0, 0,  0, 0, 0},
+    {{0}, {0},   {0}, {0}, 0,   0, 0, 0,  0, 0, 0,  0, 0, 0,  0, 0,  0, 0, 0}},
+    0, 0,   0, 0, 0,   0, 0, 0,   0, 0, 0,   0
 };
 
 
 // Interrupt stuff
-static uint16_t *triac_power_analyzer_main_buffer = NULL;
+static uint32_t volatile intcount = 0;
 
 static bool mp_triac_power_analyzer_timer_tick(struct repeating_timer *rt) {
-    adc_hw->cs |= ADC_CS_START_ONCE_BITS;
-    return true;
-}
+    // Interrupt logic:
+    // Main part: ADC sampling
+    // results from current_reads[i-1] are in the result.
+    // This interrupt shall read voltage_reads[i] and prepare for current_reads[i], for next interruption
+    // Meanwhile we wait for voltage_read, we can calculate partial results of do a full calculation
+    // Also: We can lose a few samples while preparing the results, the
+    // more important is the cadence between reads in a set of samples
+    // Secondary part: Double buffering and interrupt processing
+    // Since the end of sampling is taking too long and potentially interfering with
+    // I2C display communication timing, the processing is beeing split per index
+    // and being processed with double buffering.
+    uint16_t last_current_reading = adc_hw->result;
+    hw_write_masked(&adc_hw->cs, tpa_singleton.voltage_pin << ADC_CS_AINSEL_LSB, ADC_CS_AINSEL_BITS);
+    hw_set_bits(&adc_hw->cs, ADC_CS_START_ONCE_BITS);
 
-static void mp_triac_power_analyzer_dma_complete_irq(){
-    dma_hw->ints0 = 1u << tpa_singleton.dma_chan;
-    dma_channel_set_read_addr(tpa_singleton.dma_chan, &adc_hw->fifo, true);
+    uint64_t start = time_us_64();
 
-    tpa_singleton.interrupt_count++; 
-    // Lasso de inicialização:
-    for(uint i=0; i<tpa_singleton.histo_size; i++){
-        tpa_singleton.histo_voltage[i] = 0;
-        tpa_singleton.histo_current[i] = 0;
-    }
+    mp_triac_power_analyzer_doublebuffer_obj_t *iobj = &tpa_singleton.db[tpa_singleton.i_phase];
+    mp_triac_power_analyzer_doublebuffer_obj_t *uobj = &tpa_singleton.db[tpa_singleton.u_phase];
+    tpa_singleton.interrupt_count++;
+    if(tpa_singleton.mbp==0xFFFF){
+        // First time running, or if running right after a sample.
+        // last_current_reading is probably invalid... only doing initializations
+        // at least i_phase and u_phase should be already be in the right places
+        memset(iobj->histo_voltage, 0, sizeof(int32_t)*POWER_ANALYZER_HISTO_SIZE);
+        memset(iobj->histo_current, 0, sizeof(int32_t)*POWER_ANALYZER_HISTO_SIZE);
+        iobj->histo_count = 0;
 
-    // Primeiro lasso: calculando apenas a média, pois todas as outras operações dependem dela
-    uint32_t sumV, sumC;
-    uint16_t *ptr = triac_power_analyzer_main_buffer;
-    if(tpa_singleton.voltage_pin<tpa_singleton.current_pin){
-        sumV = *ptr;
-        ptr++;
-        sumC = *ptr;
-        ptr++;
-    } else {
-        sumV = ptr[2*tpa_singleton.analized_samples-1];
-        sumC = *ptr;
-        ptr++;
-    }
-    for(uint i=1; i<tpa_singleton.analized_samples; i++){
-        sumV += *ptr;
-        ptr++;
-        sumC += *ptr;
-        ptr++;
-    }
-    uint32_t offsetV = sumV/tpa_singleton.analized_samples;
-    uint32_t offsetC = sumC/tpa_singleton.analized_samples;
-    tpa_singleton.offset_voltage = offsetV;
-    tpa_singleton.offset_current = offsetC;
+        iobj->i_sumV = 0;
+        iobj->i_sumC = 0;
+        iobj->i_sumP = 0;
+        iobj->i_maxV = 0;
+        iobj->i_maxC = 0;
+        iobj->i_maxP = 0;
+        iobj->i_minV = 0;
+        iobj->i_minC = 0;
+        iobj->i_minP = 0;
+        iobj->i_histoPos = 0;
+        iobj->i_histoCount = 0;
+        iobj->i_lastV = 0;
+        iobj->i_sqsumV = 0;
+        iobj->i_sqsumC = 0;
 
-    // Segundo lasso: Calculando todas as outras estatisticas
-    ptr = triac_power_analyzer_main_buffer;
-    int lastV, maxV, minV, maxC, minC, maxP, minP;
-    uint32_t sqsumV=0, sqsumC=0;
-    int32_t sumP=0;
-    uint16_t histoPos = 0;
-    uint8_t histoCount = 0;
-    if(tpa_singleton.voltage_pin<tpa_singleton.current_pin){
-        lastV = triac_power_analyzer_main_buffer[0]-offsetV;
-        maxC = triac_power_analyzer_main_buffer[1]-offsetC;
-    } else {
-        lastV = triac_power_analyzer_main_buffer[1]-offsetV;
-        maxC = triac_power_analyzer_main_buffer[0]-offsetC;
-    }
-    maxV = lastV;
-    minV = lastV;
-    minC = maxC;
-    maxP = maxV*maxC;
-    minP = maxP;
+        tpa_singleton.mbp = 0;
+    } else if(tpa_singleton.mbp < POWER_ANALYZER_BUFFER_SIZE){
+        // Registering and getting the last position in the interrupt buffer
+        int16_t v = iobj->voltage_buffer[tpa_singleton.mbp];
+        int16_t c = last_current_reading&0x0FFF;
+        iobj->current_buffer[tpa_singleton.mbp] = c;
 
-    for(uint i=1; i<tpa_singleton.analized_samples; i++){
-        int v, c, p;
-        if(tpa_singleton.voltage_pin<tpa_singleton.current_pin){
-            v = *ptr-offsetV;
-            ptr++;
-            c = *ptr-offsetC;
-            ptr++;
+        // Dealing only with "current sample" first
+        if(tpa_singleton.mbp==0){
+            iobj->i_sumV = v;
+            iobj->i_sumC = c;
+            iobj->i_maxV = v;
+            iobj->i_maxC = c;
+            iobj->i_minV = v;
+            iobj->i_minC = c;
         } else {
-            c = *ptr-offsetC;
-            ptr++;
-            v = *ptr-offsetV;
-            ptr++;
+            iobj->i_sumV += v;
+            iobj->i_sumC += c;
+            if(v>iobj->i_maxV)iobj->i_maxV = v;
+            if(v<iobj->i_minV)iobj->i_minV = v;
+            if(c>iobj->i_maxC)iobj->i_maxC = c;
+            if(c<iobj->i_minC)iobj->i_minC = c;
         }
-        p = v*c;
-        sqsumV += v*v;
-        sqsumC += c*c;
-        sumP += p;
-        if(v>maxV) maxV=v;
-        if(v<minV) minV=v;
-        if(c>maxC) maxC=c;
-        if(c<minC) minC=c;
-        if(p>maxP) maxP=p;
-        if(p<minP) minP=p;
-        if(tpa_singleton.histo_size>0){
-            if(histoPos==0){
-                if(lastV<0 && v>0){
-                    tpa_singleton.histo_voltage[0] += v;
-                    tpa_singleton.histo_current[0] += c;
-                    histoPos = 1;
-                    histoCount++;
-                }
+        // And then dealing with last sampling period
+        v = uobj->voltage_buffer[tpa_singleton.mbp]-tpa_singleton.offset_voltage;
+        c = uobj->current_buffer[tpa_singleton.mbp]-tpa_singleton.offset_current;
+        int32_t p = v*c;
+        if(tpa_singleton.mbp==0){
+            iobj->i_maxP = p;
+            iobj->i_minP = p;
+            iobj->i_lastV = v;
+        } else {
+            if(p>iobj->i_maxP) iobj->i_maxP = p;
+            if(p<iobj->i_minP) iobj->i_minP = p;
+        }
+        iobj->i_sqsumV += v*v;
+        iobj->i_sqsumC += c*c;
+        iobj->i_sumP += p;
+
+        if(iobj->i_histoPos==0){
+            if(iobj->i_lastV<0 && v>0){
+                iobj->histo_voltage[0] += v;
+                iobj->histo_current[0] += c;
+                iobj->i_histoPos = 1;
+                iobj->i_histoCount++;
+            }
+        } else {
+            if(iobj->i_histoPos>=POWER_ANALYZER_HISTO_SIZE-1){
+                iobj->histo_voltage[iobj->i_histoPos] += v;
+                iobj->histo_current[iobj->i_histoPos] += c;
+                iobj->i_histoPos++;
             } else {
-                if(histoPos>=tpa_singleton.histo_size-1){
-                    tpa_singleton.histo_voltage[histoPos] += v;
-                    tpa_singleton.histo_current[histoPos] += c;
-                    histoPos++;
-                } else {
-                    histoPos = 0;
-                }
+                iobj->i_histoPos = 0;
             }
         }
-        lastV = v;
+        iobj->i_lastV = v;
+
+        tpa_singleton.mbp++;
     }
+    if(tpa_singleton.mbp>=POWER_ANALYZER_BUFFER_SIZE){
+        tpa_singleton.offset_voltage = iobj->i_sumV/POWER_ANALYZER_BUFFER_SIZE;
+        tpa_singleton.offset_current = iobj->i_sumC/POWER_ANALYZER_BUFFER_SIZE;
+        tpa_singleton.pos_peak_voltage = iobj->i_maxV - tpa_singleton.offset_voltage;
+        tpa_singleton.pos_peak_current = iobj->i_minV - tpa_singleton.offset_current;
+        tpa_singleton.neg_peak_voltage = iobj->i_maxC - tpa_singleton.offset_voltage;
+        tpa_singleton.neg_peak_current = iobj->i_minC - tpa_singleton.offset_current;
+        tpa_singleton.pos_peak_power = iobj->i_maxP;
+        tpa_singleton.neg_peak_power = iobj->i_minP;
+        tpa_singleton.squaresum_voltage = iobj->i_sqsumV;
+        tpa_singleton.squaresum_current = iobj->i_sqsumC;
+        tpa_singleton.sum_power = iobj->i_sumP;
 
-    tpa_singleton.histo_count = histoCount;
-    tpa_singleton.offset_voltage = offsetV;
-    tpa_singleton.offset_current = offsetC;
-    tpa_singleton.pos_peak_voltage = maxV;
-    tpa_singleton.pos_peak_current = maxC;
-    tpa_singleton.pos_peak_power = maxP;
-    tpa_singleton.neg_peak_voltage = minV;
-    tpa_singleton.neg_peak_current = minC;
-    tpa_singleton.neg_peak_power = minP;
-    tpa_singleton.squaresum_voltage = sqsumV;
-    tpa_singleton.squaresum_current = sqsumC;
-    tpa_singleton.sum_power = sumP;
+        tpa_singleton.mbp=0xFFFF;
+        // switching user and interrupt buffer contexts
+        tpa_singleton.u_phase = tpa_singleton.i_phase;
+        tpa_singleton.i_phase = (tpa_singleton.i_phase)?0:1;
+        intcount--;
+    } else {
+        // Done everything we could, so waiting for the prepared ADC sample...
+        while (!(adc_hw->cs & ADC_CS_READY_BITS))
+            tight_loop_contents();
+        uint16_t voltage_reading = adc_hw->result;
+        // As fast as possible, prepare the current sampling
+        hw_write_masked(&adc_hw->cs, tpa_singleton.current_pin << ADC_CS_AINSEL_LSB, ADC_CS_AINSEL_BITS);
+        hw_set_bits(&adc_hw->cs, ADC_CS_START_ONCE_BITS);
+        iobj->voltage_buffer[tpa_singleton.mbp] = voltage_reading&0x0FFF;
+    }
+    uint32_t dt = time_us_64()-start;
+    if(dt>intcount) intcount = dt;
+    return true;
 }
-
 
 // General configs ======================================================================================
 
 static void mp_triac_power_analyzer_print(const mp_print_t *print, mp_obj_t self_in, mp_print_kind_t kind) {
     mp_triac_power_analyzer_obj_t *self = MP_OBJ_TO_PTR(self_in);
-    mp_printf(print, "Triac.PowerAnalyzer(volt=%d,amp=%d)", self->voltage_pin, self->current_pin);
+    mp_printf(print, "PowerAnalyzer(volt=%d,amp=%d)", self->voltage_pin, self->current_pin);
 }
 
 static void mp_triac_power_analyzer_init_helper(size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
     enum { ARG_voltage_pin, ARG_current_pin, ARG_sample_rate, ARG_analized_samples, ARG_histo_size};
     static const mp_arg_t allowed_args[] = {
-        { MP_QSTR_voltage_pin, MP_ARG_REQUIRED | MP_ARG_OBJ, {.u_int = 0} },
-        { MP_QSTR_current_pin, MP_ARG_REQUIRED | MP_ARG_OBJ, {.u_int = 1} },
-        { MP_QSTR_sample_rate, MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 6000} },
-        { MP_QSTR_analized_samples, MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 600} },
-        { MP_QSTR_histo_size, MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 120} },
+        { MP_QSTR_voltage_pin,      MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 0} },
+        { MP_QSTR_current_pin,      MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 1} },
+        { MP_QSTR_sample_rate,      MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 6000} },
     };
 
     mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
@@ -181,85 +199,18 @@ static void mp_triac_power_analyzer_init_helper(size_t n_args, const mp_obj_t *p
     if(args[ARG_sample_rate].u_int<0 || args[ARG_sample_rate].u_int>=100000){
         mp_raise_ValueError(MP_ERROR_TEXT("Invalid sample rate!"));
     }
-    if(args[ARG_analized_samples].u_int<10 || args[ARG_analized_samples].u_int>=4000){
-        mp_raise_ValueError(MP_ERROR_TEXT("Invalid analized sample count!"));
-    }
-    if(args[ARG_histo_size].u_int<0 || args[ARG_histo_size].u_int>=args[ARG_analized_samples].u_int){
-        mp_raise_ValueError(MP_ERROR_TEXT("Invalid histo size!"));
-    }
+    tpa_singleton.mbp = 0xFFFF;
 
-    if(triac_power_analyzer_main_buffer==NULL){
-        triac_power_analyzer_main_buffer = m_malloc(2*2*args[ARG_analized_samples].u_int);
-        tpa_singleton.analized_samples = args[ARG_analized_samples].u_int;
-    }
-    if(args[ARG_analized_samples].u_int!=tpa_singleton.analized_samples){
-        if(triac_power_analyzer_main_buffer!=NULL){
-            m_free(triac_power_analyzer_main_buffer);
-        }
-        triac_power_analyzer_main_buffer = m_malloc(2*2*args[ARG_analized_samples].u_int);
-        tpa_singleton.analized_samples = args[ARG_analized_samples].u_int;
-    }
-
-    if(tpa_singleton.histo_voltage==NULL || tpa_singleton.histo_current){
-        tpa_singleton.histo_voltage = m_malloc(4*args[ARG_histo_size].u_int);
-        tpa_singleton.histo_current = m_malloc(4*args[ARG_histo_size].u_int);
-        tpa_singleton.analized_samples = args[ARG_histo_size].u_int;
-    }
-    if(args[ARG_histo_size].u_int!=tpa_singleton.histo_size){
-        if(tpa_singleton.histo_voltage!=NULL){
-            m_free(tpa_singleton.histo_voltage);
-        }
-        if(tpa_singleton.histo_current!=NULL){
-            m_free(tpa_singleton.histo_current);
-        }
-        tpa_singleton.histo_voltage = m_malloc(4*args[ARG_histo_size].u_int);
-        tpa_singleton.histo_current = m_malloc(4*args[ARG_histo_size].u_int);
-        tpa_singleton.analized_samples = args[ARG_histo_size].u_int;
-    }
+    tpa_singleton.db[0].histo_count = 0;
+    tpa_singleton.db[1].histo_count = 0;
 
     tpa_singleton.voltage_pin = args[ARG_voltage_pin].u_int;
     tpa_singleton.current_pin = args[ARG_current_pin].u_int;
 
+    adc_gpio_init(26+tpa_singleton.voltage_pin);
+    adc_gpio_init(26+tpa_singleton.current_pin);
     adc_init();
-    const uint8_t pins[4] = {26, 27, 28, 29};
-    adc_gpio_init(pins[tpa_singleton.voltage_pin]);
-    adc_gpio_init(pins[tpa_singleton.current_pin]);
-
-    adc_set_round_robin((1<<tpa_singleton.voltage_pin)|(1<<tpa_singleton.current_pin));
-
-    adc_fifo_setup(
-        /* en= */ true,     // enable FIFO
-        /* dreq_en= */ true,// pace DMA with DREQ when >=1 word in FIFO
-        /* thresh= */ 1,    // DREQ when >=1 sample
-        /* err= */ false,   // don't include error bit
-        /* byte_shift= */ false
-    );
-
-    if (tpa_singleton.dma_chan >= 0) {
-        dma_channel_cleanup(tpa_singleton.dma_chan);
-        dma_channel_unclaim(tpa_singleton.dma_chan);
-        tpa_singleton.dma_chan = INVALID_DMA_CHANNEL;
-    }
-
-    tpa_singleton.dma_chan = dma_claim_unused_channel(true);
-    dma_channel_config cfg = dma_channel_get_default_config(tpa_singleton.dma_chan);
-    channel_config_set_transfer_data_size(&cfg, DMA_SIZE_16); // 16-bit reads
-    channel_config_set_read_increment(&cfg, false);           // FIFO register
-    channel_config_set_write_increment(&cfg, true);           // buffer indexing
-    channel_config_set_dreq(&cfg, DREQ_ADC);                  // pace by ADC FIFO
-
-    dma_channel_configure(
-        tpa_singleton.dma_chan,
-        &cfg,
-        triac_power_analyzer_main_buffer,
-        &adc_hw->fifo,
-        2*tpa_singleton.analized_samples,
-        true
-    );
-
-    dma_channel_set_irq0_enabled(tpa_singleton.dma_chan, true);
-    irq_set_exclusive_handler(DMA_IRQ_0, mp_triac_power_analyzer_dma_complete_irq);
-    irq_set_enabled(DMA_IRQ_0, true);
+    adc_set_clkdiv(0);
 
     if(tpa_singleton.sample_rate!=0){
         tpa_singleton.sample_rate = 0;
@@ -290,26 +241,9 @@ static mp_obj_t mp_triac_power_analyzer_close(mp_obj_t self_in) {
         tpa_singleton.sample_rate = 0;
     }
 
-    if(tpa_singleton.dma_chan>=0){
-        irq_set_enabled(DMA_IRQ_0, false);
-        dma_channel_cleanup(tpa_singleton.dma_chan);
-        dma_channel_unclaim(tpa_singleton.dma_chan);
-        tpa_singleton.dma_chan = INVALID_DMA_CHANNEL;
-    }
     adc_init();
-
-    if(tpa_singleton.histo_voltage!=NULL){
-        m_free(tpa_singleton.histo_voltage);
-    }
-    if(tpa_singleton.histo_current!=NULL){
-        m_free(tpa_singleton.histo_current);
-    }
-    tpa_singleton.analized_samples = 0;
-
-    if(triac_power_analyzer_main_buffer!=NULL){
-        m_free(triac_power_analyzer_main_buffer);
-    }
-    tpa_singleton.analized_samples = 0;
+    tpa_singleton.voltage_pin = INVALIDPIN;
+    tpa_singleton.current_pin = INVALIDPIN;
 
     return mp_const_none;
 }
@@ -343,16 +277,17 @@ static mp_obj_t triac_power_analyzer_sample_rate(mp_obj_t self_obj) {
 MP_DEFINE_CONST_FUN_OBJ_1(triac_power_analyzer_sample_rate_obj,  triac_power_analyzer_sample_rate);
 
 static mp_obj_t triac_power_analyzer_analized_samples(mp_obj_t self_obj) {
-    return mp_obj_new_int(tpa_singleton.analized_samples);
+    return mp_obj_new_int(POWER_ANALYZER_BUFFER_SIZE);
 }
 MP_DEFINE_CONST_FUN_OBJ_1(triac_power_analyzer_analized_samples_obj,  triac_power_analyzer_analized_samples);
 
 static mp_obj_t triac_power_analyzer_histo_size(mp_obj_t self_obj) {
-    return mp_obj_new_int(tpa_singleton.histo_size);
+    return mp_obj_new_int(POWER_ANALYZER_HISTO_SIZE);
 }
 MP_DEFINE_CONST_FUN_OBJ_1(triac_power_analyzer_histo_size_obj,  triac_power_analyzer_histo_size);
 
 static mp_obj_t triac_power_analyzer_running(mp_obj_t self_obj) {
+    // mp_printf(&mp_sys_stdout_print, "running\n");
     return tpa_singleton.running ? mp_const_true : mp_const_false;
 }
 MP_DEFINE_CONST_FUN_OBJ_1(triac_power_analyzer_running_obj,  triac_power_analyzer_running);
@@ -374,38 +309,40 @@ static mp_obj_t triac_power_analyzer_current_mult(size_t n_args, const mp_obj_t 
 MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(triac_power_analyzer_current_mult_obj, 1, 2, triac_power_analyzer_current_mult);
 
 static mp_obj_t triac_power_analyzer_get_offsets(mp_obj_t self_obj) {
-    uint8_t initial_interrupt_count, final_interrupt_count;
+    uint8_t initial_phase, final_phase;
     uint16_t offset_voltage, offset_current;
     do{
-        initial_interrupt_count = tpa_singleton.interrupt_count;
+        initial_phase = tpa_singleton.interrupt_count;
         offset_voltage = tpa_singleton.offset_voltage;
         offset_current = tpa_singleton.offset_current;
-        final_interrupt_count = tpa_singleton.interrupt_count;
-    }while(initial_interrupt_count!=final_interrupt_count);
+        final_phase = tpa_singleton.interrupt_count;
+    }while(initial_phase!=final_phase);
 
-    mp_obj_t result_dict[2 * 2];
+    mp_obj_t result_dict[3 * 2];
     result_dict[0] = MP_ROM_QSTR(MP_QSTR_v);
     result_dict[1] = mp_obj_new_int(offset_voltage);
     result_dict[2] = MP_ROM_QSTR(MP_QSTR_c);
     result_dict[3] = mp_obj_new_int(offset_current);
-    return mp_obj_dict_make_new(&mp_type_dict, 0, 2, result_dict);
+    result_dict[4] = MP_ROM_QSTR(MP_QSTR_i);
+    result_dict[5] = mp_obj_new_int(intcount);
+    return mp_obj_dict_make_new(&mp_type_dict, 0, 3, result_dict);
 }
 MP_DEFINE_CONST_FUN_OBJ_1(triac_power_analyzer_get_offsets_obj,  triac_power_analyzer_get_offsets);
 
 static mp_obj_t triac_power_analyzer_get_peaks(mp_obj_t self_obj) {
-    uint8_t initial_interrupt_count, final_interrupt_count;
+    uint8_t initial_phase, final_phase;
     uint16_t pos_peak_voltage, pos_peak_current, neg_peak_voltage, neg_peak_current;
     int32_t pos_peak_power, neg_peak_power;
     do{
-        initial_interrupt_count = tpa_singleton.interrupt_count;
+        initial_phase = tpa_singleton.u_phase;
         pos_peak_voltage = tpa_singleton.pos_peak_voltage;
         pos_peak_current = tpa_singleton.pos_peak_current;
         pos_peak_power = tpa_singleton.pos_peak_power;
         neg_peak_voltage = tpa_singleton.neg_peak_voltage;
         neg_peak_current = tpa_singleton.neg_peak_current;
         neg_peak_power = tpa_singleton.neg_peak_power;
-        final_interrupt_count = tpa_singleton.interrupt_count;
-    }while(initial_interrupt_count!=final_interrupt_count);
+        final_phase = tpa_singleton.u_phase;
+    }while(initial_phase!=final_phase);
 
     mp_obj_t result_dict[6 * 2];
     result_dict[0] = MP_ROM_QSTR(MP_QSTR_p_v);
@@ -425,17 +362,17 @@ static mp_obj_t triac_power_analyzer_get_peaks(mp_obj_t self_obj) {
 MP_DEFINE_CONST_FUN_OBJ_1(triac_power_analyzer_get_peaks_obj,  triac_power_analyzer_get_peaks);
 
 static mp_obj_t triac_power_analyzer_get_rms(mp_obj_t self_obj) {
-    uint8_t initial_interrupt_count, final_interrupt_count;
+    uint8_t initial_phase, final_phase;
     int32_t sum_power;
     uint32_t squaresum_voltage, squaresum_current;
     do{
-        initial_interrupt_count = tpa_singleton.interrupt_count;
+        initial_phase = tpa_singleton.u_phase;
         squaresum_voltage = tpa_singleton.squaresum_voltage;
         squaresum_current = tpa_singleton.squaresum_current;
         sum_power = tpa_singleton.sum_power;
-        final_interrupt_count = tpa_singleton.interrupt_count;
-    }while(initial_interrupt_count!=final_interrupt_count);
-    float samplenr = (float)tpa_singleton.analized_samples;
+        final_phase = tpa_singleton.u_phase;
+    }while(initial_phase!=final_phase);
+    float samplenr = (float)POWER_ANALYZER_BUFFER_SIZE;
     mp_obj_t result_dict[3 * 2];
     result_dict[0] = MP_ROM_QSTR(MP_QSTR_v);
     result_dict[1] = mp_obj_new_float( sqrt(squaresum_voltage/samplenr)*tpa_singleton.voltage_multiplier );
@@ -447,6 +384,62 @@ static mp_obj_t triac_power_analyzer_get_rms(mp_obj_t self_obj) {
     return mp_obj_dict_make_new(&mp_type_dict, 0, 3, result_dict);
 }
 MP_DEFINE_CONST_FUN_OBJ_1(triac_power_analyzer_get_rms_obj,  triac_power_analyzer_get_rms);
+
+static mp_obj_t triac_power_analyzer_voltage_histo(mp_obj_t self_obj) {
+    uint8_t initial_phase, final_phase;
+    int32_t *voltage_histo;
+    //uint8_t histo_count;
+    voltage_histo = m_malloc(4*POWER_ANALYZER_HISTO_SIZE);
+    do{
+        initial_phase = tpa_singleton.u_phase;
+        for(uint i=0; i<POWER_ANALYZER_HISTO_SIZE; i++){
+            voltage_histo[i] = tpa_singleton.db[tpa_singleton.u_phase].histo_voltage[i];
+        }
+        //histo_count = tpa_singleton.histo_count;
+        final_phase = tpa_singleton.u_phase;
+    }while(initial_phase!=final_phase);
+
+    mp_obj_t *objlist = m_malloc(sizeof(mp_obj_t)*POWER_ANALYZER_HISTO_SIZE);
+    for(uint i=0; i<POWER_ANALYZER_HISTO_SIZE; i++){
+        objlist[i] = mp_obj_new_int(voltage_histo[i]);
+        // if(histo_count==0) objlist[i] = mp_obj_new_float(0);
+        // else objlist[i] = mp_obj_new_float(voltage_histo[i]*tpa_singleton.voltage_multiplier/histo_count);
+    }
+    m_free(voltage_histo);
+
+    mp_obj_t ret = mp_obj_new_list(POWER_ANALYZER_HISTO_SIZE, objlist);
+    m_free(objlist);
+    return ret;
+}
+MP_DEFINE_CONST_FUN_OBJ_1(triac_power_analyzer_voltage_histo_obj,  triac_power_analyzer_voltage_histo);
+
+static mp_obj_t triac_power_analyzer_current_histo(mp_obj_t self_obj) {
+    uint8_t initial_phase, final_phase;
+    int32_t *current_histo;
+    //uint8_t histo_count;
+    current_histo = m_malloc(4*POWER_ANALYZER_HISTO_SIZE);
+    do{
+        initial_phase = tpa_singleton.u_phase;
+        for(uint i=0; i<POWER_ANALYZER_HISTO_SIZE; i++){
+            current_histo[i] = tpa_singleton.db[tpa_singleton.u_phase].histo_current[i];
+        }
+        //histo_count = tpa_singleton.histo_count;
+        final_phase = tpa_singleton.u_phase;
+    }while(initial_phase!=final_phase);
+
+    mp_obj_t *objlist = m_malloc(sizeof(mp_obj_t)*POWER_ANALYZER_HISTO_SIZE);
+    for(uint i=0; i<POWER_ANALYZER_HISTO_SIZE; i++){
+        objlist[i] = mp_obj_new_int(current_histo[i]);
+        // if(histo_count==0) objlist[i] = mp_obj_new_float(0);
+        // else objlist[i] = mp_obj_new_float(current_histo[i]*tpa_singleton.current_multiplier/histo_count);
+    }
+    m_free(current_histo);
+
+    mp_obj_t ret = mp_obj_new_list(POWER_ANALYZER_HISTO_SIZE, objlist);
+    m_free(objlist);
+    return ret;
+}
+MP_DEFINE_CONST_FUN_OBJ_1(triac_power_analyzer_current_histo_obj,  triac_power_analyzer_current_histo);
 
 
 // Main methods =====================================================================
@@ -468,7 +461,8 @@ static const mp_rom_map_elem_t triac_power_analyzer_locals_dict_table[] = {
     { MP_ROM_QSTR(MP_QSTR_get_offsets), MP_ROM_PTR(&triac_power_analyzer_get_offsets_obj) },
     { MP_ROM_QSTR(MP_QSTR_get_peaks), MP_ROM_PTR(&triac_power_analyzer_get_peaks_obj) },
     { MP_ROM_QSTR(MP_QSTR_get_rms), MP_ROM_PTR(&triac_power_analyzer_get_rms_obj) },
-    
+    { MP_ROM_QSTR(MP_QSTR_voltage_histo), MP_ROM_PTR(&triac_power_analyzer_voltage_histo_obj) },
+    { MP_ROM_QSTR(MP_QSTR_current_histo), MP_ROM_PTR(&triac_power_analyzer_current_histo_obj) },
 };
 MP_DEFINE_CONST_DICT(mp_triac_power_analyzer_locals_dict, triac_power_analyzer_locals_dict_table);
 

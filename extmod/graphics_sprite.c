@@ -13,8 +13,7 @@
 // General configs ======================================================================================
 static void mp_graphics_sprite_print(const mp_print_t *print, mp_obj_t self_in, mp_print_kind_t kind) {
     mp_graphics_sprite_obj_t *self = MP_OBJ_TO_PTR(self_in);
-    mp_printf(print, "Graphics.sprite(w=%d, h=%d, s=%d)",
-        self->width, self->height, self->stride);
+    mp_printf(print, "Sprite(w=%d, h=%d, s=%d)", self->width, self->height, self->stride);
 }
 
 static void mp_graphics_sprite_init_helper(mp_obj_base_t* self_obj, size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
@@ -72,7 +71,7 @@ static void mp_graphics_sprite_init_helper(mp_obj_base_t* self_obj, size_t n_arg
     }
     if(self->width>0 && self->buffer==NULL){
         // allocating internally
-        self->buffer = malloc(self->width&self->stride);
+        self->buffer = m_malloc(self->width*self->stride);
         self->buffer_is_internal = 1;
     }
 }
@@ -87,7 +86,7 @@ MP_DEFINE_CONST_FUN_OBJ_KW(graphics_sprite_init_obj, 1, mp_graphics_sprite_init)
 static mp_obj_t mp_graphics_sprite_deinit(mp_obj_t self_obj) {
     mp_graphics_sprite_obj_t *self = (mp_graphics_sprite_obj_t *)MP_OBJ_TO_PTR(self_obj);
     if(self->buffer_is_internal && self->buffer!=NULL){
-        free(self->buffer);
+        m_free(self->buffer);
         self->buffer = NULL;
         self->buffer_is_internal = 0;
     }
@@ -130,10 +129,7 @@ static MP_DEFINE_CONST_FUN_OBJ_1(graphics_sprite_get_stride_obj, graphics_sprite
 
 static mp_obj_t graphics_sprite_get_buffer(mp_obj_t self_obj) {
     mp_graphics_sprite_obj_t *self = (mp_graphics_sprite_obj_t*) MP_OBJ_TO_PTR(self_obj);
-    vstr_t vstr;
-    vstr_init_len(&vstr, self->stride*self->width);
-    memcpy(vstr.buf, self->buffer, self->stride*self->width);
-    return mp_obj_new_bytes_from_vstr(&vstr);
+    return mp_obj_new_bytearray_by_ref(self->stride*self->width, self->buffer);
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(graphics_sprite_get_buffer_obj, graphics_sprite_get_buffer);
 

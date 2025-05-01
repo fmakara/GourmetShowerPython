@@ -13,7 +13,7 @@
 // General configs ======================================================================================
 static void mp_graphics_typer_print(const mp_print_t *print, mp_obj_t self_in, mp_print_kind_t kind) {
     mp_graphics_typer_obj_t *self = MP_OBJ_TO_PTR(self_in);
-    mp_printf(print, "Graphics.Typer(ascii=%u, utf8=%u, height=%u)",
+    mp_printf(print, "Typer(ascii=%u, utf8=%u, height=%u)",
         self->ascii_count, self->utf8_count, self->height);
 }
 
