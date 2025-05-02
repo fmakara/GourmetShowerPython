@@ -224,6 +224,7 @@ int main(int argc, char **argv) {
         // Hook for resetting anything immediately following a soft reset command.
         MICROPY_BOARD_START_SOFT_RESET();
 
+        triac_power_analyzer_deinit();
         #if MICROPY_PY_NETWORK
         mod_network_deinit();
         #endif

@@ -40,7 +40,6 @@ typedef struct _mp_triac_power_analyzer_doublebuffer_obj_t {
     int16_t i_minC;
     int32_t i_minP;
     uint16_t i_histoPos;
-    uint16_t i_histoCount;
     int16_t i_lastV;
     uint32_t i_sqsumV;
     uint32_t i_sqsumC;
@@ -83,6 +82,7 @@ typedef struct _mp_triac_power_analyzer_obj_t {
 extern const mp_obj_type_t mp_triac_controller_type;
 extern const mp_obj_type_t mp_triac_power_analyzer_type;
 
+void triac_power_analyzer_deinit();
 void triac_global_init(void);
 
 #endif // MICROPY_INCLUDED_EXTMOD_MODMACHINE_H

@@ -25,8 +25,8 @@
 static mp_triac_power_analyzer_obj_t tpa_singleton = {
     {&mp_triac_power_analyzer_type}, INVALIDPIN, INVALIDPIN, 0, /*0, 0,*/ 1.0f, 1.0f, 1.0f,
     0, 0, 1, 0,
-    {{{0}, {0},   {0}, {0}, 0,   0, 0, 0,  0, 0, 0,  0, 0, 0,  0, 0,  0, 0, 0},
-    {{0}, {0},   {0}, {0}, 0,   0, 0, 0,  0, 0, 0,  0, 0, 0,  0, 0,  0, 0, 0}},
+    {{{0}, {0},   {0}, {0}, 0,   0, 0, 0,  0, 0, 0,  0, 0, 0,  0,   0, 0, 0},
+    {{0}, {0},   {0}, {0}, 0,   0, 0, 0,  0, 0, 0,  0, 0, 0,  0,   0, 0, 0}},
     0, 0,   0, 0, 0,   0, 0, 0,   0, 0, 0,   0
 };
 
@@ -73,7 +73,6 @@ static bool mp_triac_power_analyzer_timer_tick(struct repeating_timer *rt) {
         iobj->i_minC = 0;
         iobj->i_minP = 0;
         iobj->i_histoPos = 0;
-        iobj->i_histoCount = 0;
         iobj->i_lastV = 0;
         iobj->i_sqsumV = 0;
         iobj->i_sqsumC = 0;
@@ -118,19 +117,19 @@ static bool mp_triac_power_analyzer_timer_tick(struct repeating_timer *rt) {
         iobj->i_sumP += p;
 
         if(iobj->i_histoPos==0){
-            if(iobj->i_lastV<0 && v>0){
+            if(iobj->i_lastV<0 && v>0 && ((tpa_singleton.mbp+POWER_ANALYZER_HISTO_SIZE)<POWER_ANALYZER_BUFFER_SIZE)){
                 iobj->histo_voltage[0] += v;
                 iobj->histo_current[0] += c;
                 iobj->i_histoPos = 1;
-                iobj->i_histoCount++;
+                iobj->histo_count++;
             }
         } else {
-            if(iobj->i_histoPos>=POWER_ANALYZER_HISTO_SIZE-1){
+            if(iobj->i_histoPos>=POWER_ANALYZER_HISTO_SIZE){
+                iobj->i_histoPos = 0;
+            } else {
                 iobj->histo_voltage[iobj->i_histoPos] += v;
                 iobj->histo_current[iobj->i_histoPos] += c;
                 iobj->i_histoPos++;
-            } else {
-                iobj->i_histoPos = 0;
             }
         }
         iobj->i_lastV = v;
@@ -247,6 +246,10 @@ static mp_obj_t mp_triac_power_analyzer_close(mp_obj_t self_in) {
 
     return mp_const_none;
 }
+void triac_power_analyzer_deinit(){
+    mp_triac_power_analyzer_close(mp_const_none);
+}
+
 MP_DEFINE_CONST_FUN_OBJ_1(triac_power_analyzer_close_obj, mp_triac_power_analyzer_close);
 
 
@@ -295,6 +298,7 @@ MP_DEFINE_CONST_FUN_OBJ_1(triac_power_analyzer_running_obj,  triac_power_analyze
 static mp_obj_t triac_power_analyzer_voltage_mult(size_t n_args, const mp_obj_t *args) {
     if(n_args==2){
         tpa_singleton.voltage_multiplier = mp_obj_get_float(args[1]);
+        tpa_singleton.power_multiplier = tpa_singleton.voltage_multiplier*tpa_singleton.current_multiplier;
     }
     return mp_obj_new_float(tpa_singleton.voltage_multiplier);
 }
@@ -303,6 +307,7 @@ MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(triac_power_analyzer_voltage_mult_obj, 1, 2,
 static mp_obj_t triac_power_analyzer_current_mult(size_t n_args, const mp_obj_t *args) {
     if(n_args==2){
         tpa_singleton.current_multiplier = mp_obj_get_float(args[1]);
+        tpa_singleton.power_multiplier = tpa_singleton.voltage_multiplier*tpa_singleton.current_multiplier;
     }
     return mp_obj_new_float(tpa_singleton.current_multiplier);
 }
@@ -388,56 +393,55 @@ MP_DEFINE_CONST_FUN_OBJ_1(triac_power_analyzer_get_rms_obj,  triac_power_analyze
 static mp_obj_t triac_power_analyzer_voltage_histo(mp_obj_t self_obj) {
     uint8_t initial_phase, final_phase;
     int32_t *voltage_histo;
-    //uint8_t histo_count;
+    uint8_t histo_count;
     voltage_histo = m_malloc(4*POWER_ANALYZER_HISTO_SIZE);
     do{
         initial_phase = tpa_singleton.u_phase;
         for(uint i=0; i<POWER_ANALYZER_HISTO_SIZE; i++){
             voltage_histo[i] = tpa_singleton.db[tpa_singleton.u_phase].histo_voltage[i];
         }
-        //histo_count = tpa_singleton.histo_count;
+        histo_count = tpa_singleton.db[tpa_singleton.u_phase].histo_count;
         final_phase = tpa_singleton.u_phase;
     }while(initial_phase!=final_phase);
 
-    mp_obj_t *objlist = m_malloc(sizeof(mp_obj_t)*POWER_ANALYZER_HISTO_SIZE);
+    if(histo_count==0) return mp_const_none;
+
+    mp_obj_list_t *objlist = m_new_obj(mp_obj_list_t);
+    mp_obj_list_init(objlist, POWER_ANALYZER_HISTO_SIZE);
+    mp_obj_t list = MP_OBJ_FROM_PTR(objlist);
     for(uint i=0; i<POWER_ANALYZER_HISTO_SIZE; i++){
-        objlist[i] = mp_obj_new_int(voltage_histo[i]);
-        // if(histo_count==0) objlist[i] = mp_obj_new_float(0);
-        // else objlist[i] = mp_obj_new_float(voltage_histo[i]*tpa_singleton.voltage_multiplier/histo_count);
+        objlist->items[i] = mp_obj_new_float(voltage_histo[i]*tpa_singleton.voltage_multiplier/histo_count);
     }
     m_free(voltage_histo);
-
-    mp_obj_t ret = mp_obj_new_list(POWER_ANALYZER_HISTO_SIZE, objlist);
-    m_free(objlist);
-    return ret;
+    return list;
 }
 MP_DEFINE_CONST_FUN_OBJ_1(triac_power_analyzer_voltage_histo_obj,  triac_power_analyzer_voltage_histo);
 
 static mp_obj_t triac_power_analyzer_current_histo(mp_obj_t self_obj) {
     uint8_t initial_phase, final_phase;
     int32_t *current_histo;
-    //uint8_t histo_count;
-    current_histo = m_malloc(4*POWER_ANALYZER_HISTO_SIZE);
+    uint8_t histo_count;
+    current_histo = m_malloc(sizeof(int32_t)*POWER_ANALYZER_HISTO_SIZE);
     do{
         initial_phase = tpa_singleton.u_phase;
         for(uint i=0; i<POWER_ANALYZER_HISTO_SIZE; i++){
             current_histo[i] = tpa_singleton.db[tpa_singleton.u_phase].histo_current[i];
         }
-        //histo_count = tpa_singleton.histo_count;
+        histo_count = tpa_singleton.db[tpa_singleton.u_phase].histo_count;
         final_phase = tpa_singleton.u_phase;
     }while(initial_phase!=final_phase);
 
-    mp_obj_t *objlist = m_malloc(sizeof(mp_obj_t)*POWER_ANALYZER_HISTO_SIZE);
+    if(histo_count==0) return mp_const_none;
+
+    mp_obj_list_t *objlist = m_new_obj(mp_obj_list_t);
+    mp_obj_list_init(objlist, POWER_ANALYZER_HISTO_SIZE);
+    mp_obj_t list = MP_OBJ_FROM_PTR(objlist);
     for(uint i=0; i<POWER_ANALYZER_HISTO_SIZE; i++){
-        objlist[i] = mp_obj_new_int(current_histo[i]);
-        // if(histo_count==0) objlist[i] = mp_obj_new_float(0);
-        // else objlist[i] = mp_obj_new_float(current_histo[i]*tpa_singleton.current_multiplier/histo_count);
+        objlist->items[i] = mp_obj_new_float(current_histo[i]*tpa_singleton.current_multiplier/histo_count);
     }
     m_free(current_histo);
 
-    mp_obj_t ret = mp_obj_new_list(POWER_ANALYZER_HISTO_SIZE, objlist);
-    m_free(objlist);
-    return ret;
+    return list;
 }
 MP_DEFINE_CONST_FUN_OBJ_1(triac_power_analyzer_current_histo_obj,  triac_power_analyzer_current_histo);
 
