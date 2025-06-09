@@ -140,8 +140,8 @@ static bool mp_triac_power_analyzer_timer_tick(struct repeating_timer *rt) {
         tpa_singleton.offset_voltage = iobj->i_sumV/POWER_ANALYZER_BUFFER_SIZE;
         tpa_singleton.offset_current = iobj->i_sumC/POWER_ANALYZER_BUFFER_SIZE;
         tpa_singleton.pos_peak_voltage = iobj->i_maxV - tpa_singleton.offset_voltage;
-        tpa_singleton.pos_peak_current = iobj->i_minV - tpa_singleton.offset_current;
-        tpa_singleton.neg_peak_voltage = iobj->i_maxC - tpa_singleton.offset_voltage;
+        tpa_singleton.pos_peak_current = iobj->i_maxC - tpa_singleton.offset_current;
+        tpa_singleton.neg_peak_voltage = iobj->i_minV - tpa_singleton.offset_voltage;
         tpa_singleton.neg_peak_current = iobj->i_minC - tpa_singleton.offset_current;
         tpa_singleton.pos_peak_power = iobj->i_maxP;
         tpa_singleton.neg_peak_power = iobj->i_minP;

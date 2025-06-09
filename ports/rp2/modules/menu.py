@@ -44,8 +44,8 @@ class Menu():
         self._def_glyph_data = b'\x08\x08\x01\xc3\xe7~<<~\xe7\xc3'
         self._def_glyph = Sprite(raw=self._def_glyph_data)
 
-    def horizontal_glyph_menu(self, items=[['item', None, None, None, None]], no_back=False, on_loop=None, first_field=0):
-        internal=[]
+    def horizontal_glyph_menu(self, items=[['item', None, None, None, None]], no_back=False, on_loop=None, first_field=0, preselected=None):
+        internal=[] #                      Caption, Glyph, Callback, Params, Named Params
         for i in items:
             cap_size = self._def_font.calculateSize(i[0]) # x, y, maxx
             cap_y = self._display.height()-(cap_size[1]+self._def_font.lineHeight())
@@ -94,7 +94,18 @@ class Menu():
                 None)
             
             self._display.display()
-        
+        if preselected!=None:
+            index = first_field%len(internal)
+            if not internal[index]['callback'] is None:
+                try:
+                    internal[index]['callback'](*internal[index]['cb_params'],**internal[index]['cb_named_params'])
+                except Exception as e:
+                    self._display.clear()
+                    self._def_font.print(repr(e),0,0)
+                    print(repr(e))
+                    self._display.display()
+                    self.press_any()
+
         horizontal_glyph_menu_update_display(0)
         while True:
             curval = 0
@@ -129,9 +140,16 @@ class Menu():
                 if last_input==4 and not no_back: return None
                 if last_input==3:
                     if internal[index]['callback'] is None:
-                        return index
-                    internal[index]['callback'](*internal[index]['cb_params'],**internal[index]['cb_named_params'],)
-                    
+                        if not no_back: return index
+                    else:
+                        try:
+                            internal[index]['callback'](*internal[index]['cb_params'],**internal[index]['cb_named_params'])
+                        except Exception as e:
+                            self._display.clear()
+                            self._def_font.print(repr(e),0,0)
+                            print(repr(e))
+                            self._display.display()
+                            self.press_any()
                 last_input = curval
                 horizontal_glyph_menu_update_display(0)
 
@@ -139,7 +157,18 @@ class Menu():
             time.sleep(0.05)
             if not (on_loop is None): on_loop(val)
 
-
+    def press_any(self):
+        anyPressed = False
+        while not anyPressed:
+            anyPressed = not (self._btn_left.value() and self._btn_right.value() and self._btn_ok.value() and self._btn_cancel.value())
+            time.sleep(0.1)
+        self._display.clear(None)
+        self._display.display()
+        while anyPressed:
+            anyPressed = not (self._btn_left.value() and self._btn_right.value() and self._btn_ok.value() and self._btn_cancel.value())
+            time.sleep(0.1)
+        self._display.clear(None)
+        self._display.display()
 
     def read_datetime(self, val=[2025,4,20,15,10,30], live=True, caption='data', on_loop=None, on_update=None, first_field=0):
         cap_size = self._def_font.calculateSize(caption) # x, y, maxx
@@ -167,9 +196,10 @@ class Menu():
             if not live or (time.ticks_ms()%1000)<500:
                 self._def_font.print(':', third_centers[0]+third_x//2-2, half_offs[1])
                 self._def_font.print(':', third_centers[1]+third_x//2-2, half_offs[1])
-            print_center_x(str(val[0]), third_centers[0], half_offs[0], self._def_font)
+            print_center_x(str(val[0]), third_centers[2], half_offs[0], self._def_font)
             print_center_x(f"{val[1]:02d}", third_centers[1], half_offs[0], self._def_font)
-            print_center_x(f"{val[2]:02d}", third_centers[2], half_offs[0], self._def_font)
+            print_center_x(f"{val[2]:02d}", third_centers[0], half_offs[0], self._def_font)
+            
             print_center_x(f"{val[3]:02d}", third_centers[0], half_offs[1], self._def_font)
             print_center_x(f"{val[4]:02d}", third_centers[1], half_offs[1], self._def_font)
             print_center_x(f"{val[5]:02d}", third_centers[2], half_offs[1], self._def_font)
@@ -199,8 +229,9 @@ class Menu():
                 if last_input==0 or (last_input!=5 and repeat_avoid<time.ticks_ms()):
                     if last_input==0:
                         repeat_avoid = time.ticks_ms()+1000
-                    if curval==1: val[field] = val[field]-1
-                    if curval==2: val[field] = val[field]+1
+                    fixfield = field if field>2 else 2-field
+                    if curval==1: val[fixfield] = val[fixfield]-1
+                    if curval==2: val[fixfield] = val[fixfield]+1
                     val = fix_datetime(val)
                     currentSig = dateSig(val)
                     
@@ -316,3 +347,4 @@ class Menu():
             
             time.sleep(0.05)
             if not (on_loop is None): on_loop(val)
+

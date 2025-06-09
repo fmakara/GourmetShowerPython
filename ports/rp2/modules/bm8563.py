@@ -22,11 +22,13 @@ class BM8563():
         return 28
 
     def now(self):
-        return self.rtc.datetime()
+        now = self.rtc.datetime()
+        return now[0:3]+now[4:7]
 
     def setRtc(self, datetime):
         if datetime is None:
-            datetime = self.rtc.datetime()
+            datetime = self.now()
+        if len(datetime)==8:
             datetime = datetime[0:3]+datetime[4:7]
         if len(datetime)!=6:
             raise(Exception('datetime must have 6 fields'))
